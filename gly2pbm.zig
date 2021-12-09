@@ -13,15 +13,23 @@ const ASCII_NL = '\n';
 // 0x0a is an inclusive-to-encoding termination byte
 const GTFO = 0x0a;
 
-// most machines are little-endian, so this reads in reverse from xxiivv page.
-// I'm not bothering to support BE platforms right now in any intentional way.
+/// on-disk format as documented at
+/// https://wiki.xxiivv.com/site/gly_format.html
+//
+// this implementation reflects what worked on my big-endian machine. patches
+// welcome if anyone gets a chance to test on little-endian and finds that
+// it's broken
 const GlyByte = packed struct {
     y3: bool,
     y2: bool,
     y1: bool,
     y0: bool,
     y_multiple: u2,
+
+    // whether to move the draw head +1 on x axis **after** drawing the bits
+    // defined in this byte
     x_inc: bool,
+
     ascii_barf: bool,
 
     comptime {
@@ -35,7 +43,7 @@ const Glyph = struct {
 
     overall_width: usize = 0,
 
-    /// gly seems to be optimized for direct-rendering and isn't *especially*
+    /// gly, by nature of being an inline glyph protocol, isn't *especially*
     /// friendly to converting to formats that require image dimensions to be
     /// known upfront: notably, nothing in the on-disk spec prohibits each row
     /// of an image being of a different, arbitrary width, meaning we need to
@@ -51,7 +59,7 @@ const Glyph = struct {
             \\{d} {d}{s}
         ;
 
-        var imgdata = try gpa.allocator.alloc(u8, self.overall_height * (self.overall_width + 1) + 50000);
+        var imgdata = try gpa.allocator.alloc(u8, self.overall_height * (self.overall_width + 1));
         defer gpa.allocator.free(imgdata);
 
         var idx: usize = 0;
@@ -60,7 +68,6 @@ const Glyph = struct {
             idx += 1;
 
             for (row.items) |col| {
-                std.debug.print("\n{d}", .{idx});
                 imgdata[idx] = if (col) ASCII_1 else ASCII_0;
                 idx += 1;
             }
@@ -92,6 +99,9 @@ const State = struct {
     x_idx: usize = 0,
     rows_read: usize = 0,
 
+    /// seen y levels in a given column
+    seen_ys: usize = 0,
+
     glyph: Glyph,
 };
 
@@ -120,6 +130,7 @@ fn next(allocator: *std.mem.Allocator, state: State, byte: u8) !State {
         ret.in_seq = false;
         ret.x_idx = 0;
         ret.rows_read += 1;
+        ret.seen_ys = 0;
         return ret;
     }
 
@@ -133,7 +144,7 @@ fn next(allocator: *std.mem.Allocator, state: State, byte: u8) !State {
         return error.MalformedSequence;
     }
 
-    if (ret.x_idx == 0) {
+    if (ret.x_idx == 0 and ret.seen_ys == 0) {
         var i: usize = 0;
         // in theory the spec may allow writing, say, 4 bits of the vertical
         // space rather than all 16, and this is undefined behavior. this
@@ -156,8 +167,29 @@ fn next(allocator: *std.mem.Allocator, state: State, byte: u8) !State {
         }
     }
 
+    if (ret.seen_ys > 3) {
+        return error.TooManyRowsInColumn;
+    }
+
+    var tgt: usize = (16 * ret.rows_read) + (4 * @as(usize, packed_byte.y_multiple));
+    var end: usize = tgt + 4;
+    while (tgt < end) {
+        try ret.glyph.data.items[tgt].append(switch (end - tgt - 1) {
+            0 => packed_byte.y0,
+            1 => packed_byte.y1,
+            2 => packed_byte.y2,
+            3 => packed_byte.y3,
+            else => unreachable,
+        });
+
+        tgt += 1;
+    }
+
+    ret.seen_ys += 1;
+
     if (packed_byte.x_inc) {
         ret.x_idx += 1;
+        ret.seen_ys = 0;
 
         if (ret.x_idx > ret.glyph.overall_width) {
             ret.glyph.overall_width = ret.x_idx;
@@ -170,25 +202,11 @@ fn next(allocator: *std.mem.Allocator, state: State, byte: u8) !State {
             // ever seen to be encodable in the end. we may as well do it here,
             // because there's no real philosophically-purer place to do it, so
             // far
-            while (ret.glyph.data.items[filler_idx].items.len < ret.glyph.overall_width) {
+            while (ret.glyph.data.items[filler_idx].items.len < ret.x_idx) {
                 try ret.glyph.data.items[filler_idx].append(false);
             }
             filler_idx += 1;
         }
-    }
-
-    var tgt: usize = (16 * ret.rows_read) + (4 * @as(usize, packed_byte.y_multiple));
-    var end: usize = tgt + 4;
-    while (tgt < end) {
-        try ret.glyph.data.items[tgt].append(switch (end - tgt - 1) {
-            0 => packed_byte.y3,
-            1 => packed_byte.y2,
-            2 => packed_byte.y1,
-            3 => packed_byte.y0,
-            else => unreachable,
-        });
-
-        tgt += 1;
     }
 
     return ret;
@@ -262,7 +280,6 @@ test "boxgly" {
     var state = try make_initial_state(&GPArenaAllocator.allocator);
 
     for (gly_data) |it| {
-        std.debug.print("{x} ", .{it});
         state = try next(&GPArenaAllocator.allocator, state, it);
     }
 
