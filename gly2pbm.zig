@@ -112,7 +112,24 @@ fn get_arena_allocator() ArenaAllocator {
 pub fn main() anyerror!void {
     var GPArenaAllocator = get_arena_allocator();
     defer GPArenaAllocator.deinit();
-    var initial_state = make_initial_state(&GPArenaAllocator.allocator);
+    var state = try make_initial_state(&GPArenaAllocator.allocator);
+
+    const in = std.io.getStdIn();
+    const out = std.io.getStdOut();
+    var buf_in = std.io.bufferedReader(in.reader());
+    var buf_out = std.io.bufferedWriter(out.writer());
+    const reader = buf_in.reader();
+    const writer = buf_out.writer();
+
+    while (reader.readByte()) |it| {
+        state = try next(&GPArenaAllocator.allocator, state, it);
+    } else |err| switch (err) {
+        error.EndOfStream => {},
+        else => std.log.err("error reading stdin: {s}", .{err}),
+    }
+
+    try writer.writeAll(try state.glyph.to_string(&GPArenaAllocator.allocator));
+    try buf_out.flush();
 }
 
 fn make_initial_state(allocator: *std.mem.Allocator) !State {
