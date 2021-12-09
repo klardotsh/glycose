@@ -38,9 +38,7 @@ const GlyByte = packed struct {
 };
 
 const Glyph = struct {
-    /// actually bounded by format to 64, check at runtime
     overall_height: u8 = 0,
-
     overall_width: usize = 0,
 
     /// gly, by nature of being an inline glyph protocol, isn't *especially*
