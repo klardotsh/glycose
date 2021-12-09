@@ -16,8 +16,8 @@ const GTFO = 0x0a;
 /// on-disk format as documented at
 /// https://wiki.xxiivv.com/site/gly_format.html
 //
-// this implementation reflects what worked on my big-endian machine. patches
-// welcome if anyone gets a chance to test on little-endian and finds that
+// this implementation reflects what worked on my little-endian machine. patches
+// welcome if anyone gets a chance to test on big-endian and finds that
 // it's broken
 const GlyByte = packed struct {
     y3: bool,
