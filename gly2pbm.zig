@@ -51,14 +51,14 @@ const Glyph = struct {
     /// row, containing an inner list of column bits
     data: BitListList,
 
-    fn to_string(self: @This(), allocator: *std.mem.Allocator) ![]u8 {
+    fn to_string(self: @This(), allocator: std.mem.Allocator) ![]u8 {
         const p1_fmt =
             \\P1
             \\{d} {d}{s}
         ;
 
-        var imgdata = try gpa.allocator.alloc(u8, self.overall_height * (self.overall_width + 1));
-        defer gpa.allocator.free(imgdata);
+        var imgdata = try allocator.alloc(u8, self.overall_height * (self.overall_width + 1));
+        defer allocator.free(imgdata);
 
         var idx: usize = 0;
         for (self.data.items) |row| {
@@ -104,13 +104,15 @@ const State = struct {
 };
 
 fn get_arena_allocator() ArenaAllocator {
-    return ArenaAllocator.init(&gpa.allocator);
+    const allocator = gpa.allocator();
+    return ArenaAllocator.init(allocator);
 }
 
 pub fn main() anyerror!void {
     var GPArenaAllocator = get_arena_allocator();
     defer GPArenaAllocator.deinit();
-    var state = try make_initial_state(&GPArenaAllocator.allocator);
+    const allocator = GPArenaAllocator.allocator();
+    var state = try make_initial_state(allocator);
 
     const in = std.io.getStdIn();
     const out = std.io.getStdOut();
@@ -120,17 +122,17 @@ pub fn main() anyerror!void {
     const writer = buf_out.writer();
 
     while (reader.readByte()) |it| {
-        state = try next(&GPArenaAllocator.allocator, state, it);
+        state = try next(allocator, state, it);
     } else |err| switch (err) {
         error.EndOfStream => {},
-        else => std.log.err("error reading stdin: {s}", .{err}),
+        else => std.log.err("error reading stdin: {any}", .{err}),
     }
 
-    try writer.writeAll(try state.glyph.to_string(&GPArenaAllocator.allocator));
+    try writer.writeAll(try state.glyph.to_string(allocator));
     try buf_out.flush();
 }
 
-fn make_initial_state(allocator: *std.mem.Allocator) !State {
+fn make_initial_state(allocator: std.mem.Allocator) !State {
     return State{
         .in_seq = false,
         .glyph = Glyph{
@@ -139,7 +141,7 @@ fn make_initial_state(allocator: *std.mem.Allocator) !State {
     };
 }
 
-fn next(allocator: *std.mem.Allocator, state: State, byte: u8) !State {
+fn next(allocator: std.mem.Allocator, state: State, byte: u8) !State {
     var ret = state;
     if (state.in_seq and byte == GTFO) {
         ret.in_seq = false;
@@ -292,13 +294,14 @@ test "boxgly" {
 
     var GPArenaAllocator = get_arena_allocator();
     defer GPArenaAllocator.deinit();
-    var state = try make_initial_state(&GPArenaAllocator.allocator);
+    const allocator = GPArenaAllocator.allocator();
+    var state = try make_initial_state(allocator);
 
     for (gly_data) |it| {
-        state = try next(&GPArenaAllocator.allocator, state, it);
+        state = try next(allocator, state, it);
     }
 
-    var generated_pbm = try state.glyph.to_string(&GPArenaAllocator.allocator);
+    var generated_pbm = try state.glyph.to_string(allocator);
 
     try std.testing.expectEqualStrings(pbm_exp, generated_pbm);
 }
